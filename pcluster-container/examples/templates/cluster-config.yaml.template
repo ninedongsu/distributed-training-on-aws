@@ -101,7 +101,6 @@ SharedStorage:
     StorageType: FsxLustre
     FsxLustreSettings:
       FileSystemId: ${FSX_LUSTRE_ID}
-      DeploymentType: PERSISTENT_1
 
 Monitoring:
   DetailedMonitoring: true

@@ -60,6 +60,7 @@ echo "Compute Node Bootstrap: ${COMPUTE_NODE_BOOTSTRAP_SCRIPT}"
 ```bash
 # 설정 파일 디렉토리로 이동
 cd ~/distributed-training-on-aws/pcluster-container
+mkdir -p examples/configs
 
 # 인스턴스 타입 및 수량 설정 (필요시 변경)
 export COMPUTE_INSTANCE_TYPE=g5.8xlarge
@@ -171,7 +172,6 @@ SharedStorage:
     StorageType: FsxLustre
     FsxLustreSettings:
       FileSystemId: ${FSX_LUSTRE_ID}
-      DeploymentType: PERSISTENT_1
 
 Monitoring:
   DetailedMonitoring: true
@@ -261,26 +261,13 @@ ComputeResources:
 
 ---
 
-### 설정 파일 검증
+### 설정 파일 확인
 
-생성된 설정 파일을 확인하고 검증합니다:
+생성된 설정 파일을 확인합니다:
 
 ```bash
 # 설정 파일 내용 확인
 cat examples/configs/cluster-config.yaml
-
-# ParallelCluster CLI로 검증
-pcluster validate-config \
-  --config-file examples/configs/cluster-config.yaml \
-  --region ${AWS_REGION}
-```
-
-**예상 출력:**
-```json
-{
-  "message": "Configuration file is valid"
-}
-```
 
 > ⚠️ **주의:**
 > - 환경 변수가 제대로 치환되었는지 꼭 확인하세요.
@@ -311,11 +298,26 @@ pcluster create-cluster \
   "cluster": {
     "clusterName": "ml-training-cluster",
     "cloudformationStackStatus": "CREATE_IN_PROGRESS",
-    "cloudformationStackArn": "arn:aws:cloudformation:us-east-1:123456789012:stack/...",
+    "cloudformationStackArn": "arn:aws:cloudformation:us-east-1:123456789012:stack/ml-training-cluster/883840a0-cd49-11f0-8ba1-0edd122729eb",
     "region": "us-east-1",
     "version": "3.14.0",
-    "clusterStatus": "CREATE_IN_PROGRESS"
-  }
+    "clusterStatus": "CREATE_IN_PROGRESS",
+    "scheduler": {
+      "type": "slurm"
+    }
+  },
+  "validationMessages": [
+    {
+      "level": "WARNING",
+      "type": "DetailedMonitoringValidator",
+      "message": "Detailed Monitoring is enabled for EC2 instances in your compute fleet. The Amazon EC2 console will display monitoring graphs with a 1-minute period for these instances. Note that this will increase the cost. If you want to avoid this and use basic monitoring instead, please set `Monitoring / DetailedMonitoring` to false."
+    },
+    {
+      "level": "WARNING",
+      "type": "KeyPairValidator",
+      "message": "If you do not specify a key pair, you can't connect to the instance unless you choose an AMI that is configured to allow users another way to log in"
+    }
+  ]
 }
 ```
 
@@ -326,8 +328,7 @@ pcluster create-cluster \
 pcluster describe-cluster \
   --cluster-name ${CLUSTER_NAME} \
   --region ${AWS_REGION} \
-  --query 'clusterStatus' \
-  --output text
+  --query 'clusterStatus'
 ```
 
 **예상 상태:**
