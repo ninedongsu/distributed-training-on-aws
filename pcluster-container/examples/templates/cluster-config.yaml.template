@@ -49,7 +49,6 @@ Scheduling:
       - JobAcctGatherType: jobacct_gather/linux
       # Increase timeout before marking node as DOWN
       - SlurmdTimeout: 1800
-      - ResumeTimeout: 1800
       - SuspendTimeout: 300
       - ReturnToService: 2
   SlurmQueues:
