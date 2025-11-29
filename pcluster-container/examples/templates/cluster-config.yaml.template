@@ -56,7 +56,7 @@ Scheduling:
         SubnetIds:
           - ${PRIVATE_SUBNET_ID}
         PlacementGroup:
-          Enabled: true
+          Enabled: true  # Capacity Reservation 사용 시 false로 변경
         AdditionalSecurityGroups:
           - ${SECURITY_GROUP_ID}
       ComputeSettings:
@@ -68,12 +68,15 @@ Scheduling:
       JobExclusiveAllocation: true  # Each job gets exclusive access to nodes
       ComputeResources:
         - Name: distributed-ml
-          InstanceType: g5.8xlarge
-          MinCount: 2
-          MaxCount: 2
+          InstanceType: ${COMPUTE_INSTANCE_TYPE}
+          MinCount: ${COMPUTE_MIN_COUNT}
+          MaxCount: ${COMPUTE_MAX_COUNT}
+          # Capacity Reservation 사용 시 아래 주석 해제
+          # CapacityReservationTarget:
+          #   CapacityReservationId: cr-0a1f6b92ded769450  # Replace with your Capacity Reservation ID
           Efa:
             Enabled: true
-            GdrSupport: true
+            #GdrSupport: true  # p4d/p5 인스턴스만 지원
       Iam:
         AdditionalIamPolicies:
           - Policy: arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore

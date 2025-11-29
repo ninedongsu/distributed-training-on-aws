@@ -126,7 +126,7 @@ Scheduling:
         SubnetIds:
           - ${PRIVATE_SUBNET_ID}
         PlacementGroup:
-          Enabled: true
+          Enabled: true  # Capacity Reservation 사용 시 false로 변경
         AdditionalSecurityGroups:
           - ${SECURITY_GROUP_ID}
       ComputeSettings:
@@ -141,12 +141,12 @@ Scheduling:
           InstanceType: ${COMPUTE_INSTANCE_TYPE}
           MinCount: ${COMPUTE_MIN_COUNT}
           MaxCount: ${COMPUTE_MAX_COUNT}
-          # Capacity Reservation configuration (uncomment if using Capacity Block/Reservation)
+          # Capacity Reservation 사용 시 아래 주석 해제
           # CapacityReservationTarget:
           #   CapacityReservationId: cr-0a1f6b92ded769450  # Replace with your Capacity Reservation ID
           Efa:
             Enabled: true
-            #GdrSupport: true  # GPUDirect RDMA for p4d/p5 instances
+            #GdrSupport: true  # p4d/p5 인스턴스만 지원
       Iam:
         AdditionalIamPolicies:
           - Policy: arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
@@ -195,26 +195,75 @@ echo "✅ Cluster configuration file created: examples/configs/cluster-config.ya
 - **CustomActions**: Docker 및 Enroot/Pyxis 설치 스크립트
 
 **Compute Node 설정:**
-- **InstanceType**: `p5.8xlarge` - A10G GPU
-- **SubnetId**: Private 서브넷 사용
-- **MinCount/MaxCount**: 2 노드 (필요에 따라 조정 가능)
-- **EFA**: Enabled
+- **InstanceType**: 환경 변수로 설정 (기본: `g5.8xlarge`)
+- **SubnetId**: Private 서브넷
+- **MinCount/MaxCount**: 환경 변수로 조정 가능
+- **EFA**: 활성화 (고성능 네트워킹)
 - **LocalStorage**: 
-  - `/scratch`: NVMe 기반 임시 스토리지
+  - `/scratch`: NVMe 임시 스토리지
   - Root Volume: 512GB
-
-**Slurm 설정:**
-- **ScaledownIdletime**: -1 (자동 스케일다운 비활성화)
-- **JobExclusiveAllocation**: true (노드 독점 할당)
-- **QueueUpdateStrategy**: DRAIN
+- **CustomActions**: Docker 및 Enroot/Pyxis 설치 스크립트
 
 **SharedStorage:**
 - **FSx OpenZFS** (`/fsx`): Home 디렉토리 및 사용자 데이터
 - **FSx Lustre** (`/lustre`): 학습 데이터셋
+  - 기존 FSx Lustre 파일 시스템을 사용 (`FileSystemId`로 참조)
+  - **Data Repository Association (DRA)**은 이미 01-prerequisites.md에서 설정됨
+  - 클러스터가 마운트하면 기존 DRA 설정이 자동으로 적용됨:
+    - `/lustre/data` ↔ `s3://${S3_BUCKET_NAME}/data/`
+    - `/lustre/checkpoints` ↔ `s3://${S3_BUCKET_NAME}/checkpoints/`
+    - `/lustre/logs` ↔ `s3://${S3_BUCKET_NAME}/logs/`
+    - `/lustre/results` ↔ `s3://${S3_BUCKET_NAME}/results/`
+
+> 💡 **DRA는 FSx 레벨의 설정**이므로 ParallelCluster YAML에서 별도 설정이 필요 없습니다.
+
+---
+
+### Capacity Reservation 사용 (선택사항)
+
+GPU 인스턴스 가용성을 보장하기 위해 Capacity Reservation을 사용할 수 있습니다.
+
+#### Capacity Reservation 생성 (AWS Console 또는 CLI)
+
+```bash
+# Capacity Reservation 생성 예시
+aws ec2 create-capacity-reservation \
+  --instance-type g5.12xlarge \
+  --instance-platform Linux/UNIX \
+  --availability-zone ${PRIMARY_AZ} \
+  --instance-count 2 \
+  --instance-match-criteria targeted \
+  --region ${AWS_REGION}
+```
+
+#### 설정 파일 수정
+
+Capacity Reservation을 사용하려면 설정 파일에서 다음을 수정:
+
+1. **PlacementGroup 비활성화**:
+```yaml
+PlacementGroup:
+  Enabled: false  # Capacity Reservation과 함께 사용 불가
+```
+
+2. **CapacityReservationTarget 추가**:
+```yaml
+ComputeResources:
+  - Name: distributed-ml
+    InstanceType: ${COMPUTE_INSTANCE_TYPE}
+    MinCount: 2  # Reservation 수량과 일치
+    MaxCount: 2
+    CapacityReservationTarget:
+      CapacityReservationId: cr-0123456789abcdef0  # 실제 ID로 변경
+```
+
+> ⚠️ **주의:** Capacity Reservation 사용 시 MinCount를 Reservation 수량에 맞춰 설정해야 합니다.
+
+---
 
 ### 설정 파일 검증
 
-생성된 설정 파일을 확인합니다:
+생성된 설정 파일을 확인하고 검증합니다:
 
 ```bash
 # 설정 파일 내용 확인
@@ -320,6 +369,11 @@ pcluster ssh \
 **예상 출력:**
 ```
 Starting session with SessionId: user-0a1b2c3d4e5f6g7h8
+
+       __|  __|_  )
+       _|  (     /   Amazon Linux 2
+      ___|\___|___|
+
 ubuntu@ip-10-0-0-123:~$
 ```
 
@@ -332,36 +386,138 @@ ubuntu@ip-10-0-0-123:~$
 
 Head Node에 접속한 후 다음 명령으로 환경을 확인합니다:
 
+#### OS 및 시스템 정보
+
 ```bash
-# OS 정보 확인
+# OS 정보
 cat /etc/os-release
 
-# 마운트된 공유 스토리지 확인
-df -h | grep -E 'fsx|lustre'
-
-# Docker 설치 확인
-docker --version
-
-# Enroot 설치 확인
-enroot version
-
-# Pyxis 설치 확인 (Slurm 플러그인)
-ls -la /usr/local/lib/slurm/
+# 시스템 리소스
+free -h
+df -h
 ```
 
 **예상 출력:**
 ```
 NAME="Ubuntu"
 VERSION="22.04.x LTS (Jammy Jellyfish)"
+ID=ubuntu
+ID_LIKE=debian
 
-Filesystem                          Size  Used Avail Use% Mounted on
-10.0.1.xxx@tcp:/fsvol-xxx          512G   64M  512G   1% /fsx
-10.0.1.yyy@tcp:/yyyyyyy            1.1T  1.1M  1.1T   1% /lustre
+              total        used        free      shared  buff/cache   available
+Mem:          125Gi       2.5Gi       120Gi       1.0Mi       2.8Gi       122Gi
+Swap:            0B          0B          0B
+```
 
-Docker version 24.0.x
-enroot version 3.4.1
+#### 공유 스토리지 확인
 
-spank_pyxis.so
+```bash
+# 마운트된 공유 스토리지 확인
+df -h | grep -E 'fsx|lustre'
+
+# 또는 전체 마운트 확인
+mount | grep -E 'fsx|lustre'
+```
+
+**예상 출력:**
+```
+10.0.1.100@tcp:/fsvol-xxx  512G   64M  512G   1% /fsx
+10.0.1.101@tcp:/yyyyyyy    1.2T  1.1M  1.2T   1% /lustre
+```
+
+#### FSx Lustre 디렉토리 구조 확인
+
+```bash
+# Lustre 디렉토리 확인
+ls -la /lustre/
+
+# DRA로 연결된 디렉토리 확인
+ls -la /lustre/data/
+ls -la /lustre/checkpoints/
+ls -la /lustre/logs/
+ls -la /lustre/results/
+```
+
+**예상 출력:**
+```
+total 16
+drwxr-xr-x  6 root root 4096 Nov 29 16:00 .
+drwxr-xr-x 23 root root 4096 Nov 29 17:00 ..
+drwxr-xr-x  3 root root 4096 Nov 29 16:50 data
+drwxr-xr-x  2 root root 4096 Nov 29 16:17 checkpoints
+drwxr-xr-x  2 root root 4096 Nov 29 16:17 logs
+drwxr-xr-x  2 root root 4096 Nov 29 16:17 results
+```
+
+#### WikiText-2 데이터셋 확인
+
+```bash
+# 01-prerequisites.md에서 업로드한 데이터 확인
+ls -lh /lustre/data/wikitext-2/
+```
+
+**예상 출력:**
+```
+total 0
+-rw-r--r-- 1 root root   43 Nov 29 16:49 dataset_dict.json
+drwxr-xr-x 2 root root 4.0K Nov 29 16:49 test
+drwxr-xr-x 2 root root 4.0K Nov 29 16:49 train
+drwxr-xr-x 2 root root 4.0K Nov 29 16:49 validation
+```
+
+> 💡 **Lazy Loading:** 파일 메타데이터는 즉시 보이지만, 실제 데이터는 파일 접근 시 S3에서 로드됩니다.
+
+#### Docker 확인
+
+```bash
+# Docker 버전 확인
+docker --version
+
+# Docker 서비스 상태
+sudo systemctl status docker
+```
+
+**예상 출력:**
+```
+Docker version 24.0.7, build afdd53b
+● docker.service - Docker Application Container Engine
+     Loaded: loaded (/lib/systemd/system/docker.service; enabled)
+     Active: active (running)
+```
+
+#### Enroot 확인
+
+```bash
+# Enroot 버전 확인
+enroot version
+
+# Enroot 설정 확인
+enroot list
+```
+
+**예상 출력:**
+```
+3.4.1
+```
+
+#### Pyxis 확인
+
+```bash
+# Pyxis 플러그인 확인
+ls -la /usr/local/lib/slurm/
+
+# Slurm 설정에서 Pyxis 확인
+grep -i pyxis /opt/slurm/etc/plugstack.conf
+```
+
+**예상 출력:**
+```
+total 24
+drwxr-xr-x 2 root root  4096 Nov 29 17:15 .
+drwxr-xr-x 4 root root  4096 Nov 29 17:00 ..
+-rwxr-xr-x 1 root root 14896 Nov 29 17:15 spank_pyxis.so
+
+optional /usr/local/lib/slurm/spank_pyxis.so
 ```
 
 ---
