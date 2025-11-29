@@ -29,6 +29,9 @@
   - [5.1 S3 버킷 생성](#51-s3-버킷-생성)
   - [5.2 부트스트랩 스크립트 업로드](#52-부트스트랩-스크립트-업로드)
   - [5.3 학습 데이터셋 준비](#53-학습-데이터셋-준비)
+  - [5.4 FSx Lustre와 S3 연동 설정](#54-fsx-lustre와-s3-연동-설정)
+  - [5.5 환경 변수 저장](#55-환경-변수-저장)
+  - [5.6 S3 버킷 구조 최종 확인](#56-s3-버킷-구조-최종-확인)  
 - [다음 단계](#다음-단계)
 
 ---
@@ -511,7 +514,7 @@ EOF
 source ~/pcluster-env.sh
 ```
 
-#### 리소스 상태 확인
+#### 리소스 상태 확인 (선택 사항)
 
 **VPC 확인:**
 ```bash
@@ -738,8 +741,8 @@ docker images ${ECR_REPO_NAME}
 
 **예상 출력:**
 ```
-REPOSITORY                  TAG       IMAGE ID       CREATED          SIZE
-pytorch-training-custom     latest    abc123def456   2 minutes ago    15.2GB
+REPOSITORY                TAG       IMAGE ID       CREATED          SIZE
+pytorch-training-custom   latest    9d2cf2ea9849   27 seconds ago   20.3GB
 ```
 
 #### ECR 태그 지정
@@ -864,17 +867,6 @@ aws s3api put-object \
   --key scripts/bootstrap/ \
   --region ${AWS_REGION}
 
-aws s3api put-object \
-  --bucket ${S3_BUCKET_NAME} \
-  --key data/ \
-  --region ${AWS_REGION}
-
-aws s3api put-object \
-  --bucket ${S3_BUCKET_NAME} \
-  --key results/ \
-  --region ${AWS_REGION}
-```
-
 #### 부트스트랩 스크립트 파일 확인
 
 업로드할 스크립트 파일이 있는지 확인합니다:
@@ -964,18 +956,43 @@ EOF
 
 ### 5.3 학습 데이터셋 준비
 
-학습에 사용할 예제 데이터셋을 준비합니다.
+학습에 사용할 데이터셋을 S3에 업로드합니다. 이 데이터는 FSx Lustre를 통해 고성능으로 접근할 수 있습니다.
 
-#### 샘플 데이터 생성 및 업로드
+#### S3 디렉토리 구조
+
+학습 워크플로우에 맞춰 S3에 다음과 같은 디렉토리 구조를 생성합니다:
+
+```
+s3://parallelcluster-{account-id}-{region}/
+├── data/              # 학습 데이터셋
+├── checkpoints/       # 모델 체크포인트 (학습 중 저장)
+├── logs/              # 학습 로그
+├── results/           # 최종 결과 및 모델
+└── scripts/           # ParallelCluster Node 관련 부트스트랩 스크립트 (이미 생성됨)
+```
+
+#### 디렉토리 생성
+
+```bash
+# S3에 디렉토리 구조 생성
+aws s3api put-object --bucket ${S3_BUCKET_NAME} --key data/ --region ${AWS_REGION}
+aws s3api put-object --bucket ${S3_BUCKET_NAME} --key checkpoints/ --region ${AWS_REGION}
+aws s3api put-object --bucket ${S3_BUCKET_NAME} --key logs/ --region ${AWS_REGION}
+aws s3api put-object --bucket ${S3_BUCKET_NAME} --key results/ --region ${AWS_REGION}
+```
+
+#### 샘플 데이터셋 업로드
 
 ```bash
 # 임시 디렉토리 생성
 mkdir -p /tmp/sample-data
 
-# 샘플 텍스트 파일 생성 (예시)
-cat > /tmp/sample-data/sample.txt << 'EOF'
-This is a sample training data file.
-You can replace this with your actual training dataset.
+# 샘플 데이터 파일 생성
+cat > /tmp/sample-data/README.txt << 'EOF'
+Sample Training Dataset
+=======================
+This directory contains sample training data.
+Replace this with your actual dataset.
 EOF
 
 # S3에 업로드
@@ -988,50 +1005,288 @@ aws s3 cp /tmp/sample-data/ \
 rm -rf /tmp/sample-data
 ```
 
-#### Hugging Face 데이터셋 활용 예시
+#### 실제 데이터셋 업로드 예시
 
+**대용량 데이터셋 업로드:**
 ```bash
-# Python 스크립트로 데이터셋 다운로드 및 업로드 (예시)
-cat > /tmp/download_dataset.py << 'EOF'
+# 로컬 데이터셋 디렉토리를 S3로 업로드
+aws s3 sync /path/to/your/dataset/ \
+  s3://${S3_BUCKET_NAME}/data/imagenet/ \
+  --region ${AWS_REGION}
+```
+
+**Hugging Face 데이터셋:**
+```bash
+# Python 스크립트로 데이터셋 다운로드 및 S3 업로드
+python3 << 'EOF'
 from datasets import load_dataset
+import boto3
 import os
 
-# 작은 데이터셋 다운로드
-dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train[:100]")
+# 데이터셋 다운로드
+dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train[:1000]")
 
 # 로컬에 저장
 output_dir = "/tmp/wikitext-sample"
-os.makedirs(output_dir, exist_ok=True)
 dataset.save_to_disk(output_dir)
-print(f"Dataset saved to {output_dir}")
+
+# S3로 업로드
+s3 = boto3.client('s3')
+bucket_name = os.environ['S3_BUCKET_NAME']
+
+for root, dirs, files in os.walk(output_dir):
+    for file in files:
+        local_path = os.path.join(root, file)
+        s3_path = local_path.replace(output_dir, 'data/wikitext').lstrip('/')
+        s3.upload_file(local_path, bucket_name, s3_path)
+        print(f"Uploaded: {s3_path}")
+
+print("Dataset upload completed!")
 EOF
+```
 
-# 실행 (datasets 라이브러리 필요)
-# python3 /tmp/download_dataset.py
+#### 업로드된 데이터 확인
 
-# S3에 업로드
-# aws s3 cp /tmp/wikitext-sample/ \
-#   s3://${S3_BUCKET_NAME}/data/wikitext/ \
-#   --recursive \
-#   --region ${AWS_REGION}
+```bash
+# S3 데이터 확인
+aws s3 ls s3://${S3_BUCKET_NAME}/data/ --recursive --human-readable
+```
+
+**예상 출력:**
+```
+2024-01-01 12:00:00    1.2 KiB data/sample/README.txt
+2024-01-01 12:05:00   10.5 MiB data/wikitext/dataset_info.json
 ```
 
 ---
 
-### 5.4 환경 변수 저장
+### 5.4 FSx Lustre와 S3 연동 설정
 
-S3 버킷 정보를 환경 변수 파일에 추가합니다:
+FSx Lustre가 S3 데이터를 자동으로 가져오고 내보낼 수 있도록 Data Repository Association (DRA)을 설정합니다.
+
+> 💡 **Data Repository Association (DRA)이란?**
+> - FSx Lustre와 S3 버킷 간의 연결을 설정
+> - S3의 데이터를 FSx로 자동 import (Lazy Loading)
+> - FSx의 변경사항을 S3로 자동 export (백업)
+> - 여러 개의 S3 경로를 FSx의 다른 경로에 매핑 가능
+
+#### FSx Lustre 디렉토리 구조
+
+FSx Lustre에서 다음과 같은 디렉토리 구조를 사용합니다:
+
+```
+/lustre/
+├── data/              # S3 data/ 와 연동 (학습 데이터)
+├── checkpoints/       # S3 checkpoints/ 와 연동 (체크포인트 저장/복원)
+├── logs/              # S3 logs/ 와 연동 (학습 로그)
+└── results/           # S3 results/ 와 연동 (최종 결과)
+```
+
+#### DRA 환경 변수 설정
+
+```bash
+# DRA 이름 및 경로 설정
+export DRA_DATA_NAME=training-data
+export DRA_CHECKPOINTS_NAME=training-checkpoints
+export DRA_LOGS_NAME=training-logs
+export DRA_RESULTS_NAME=training-results
+```
+
+#### Data Repository Association 생성
+
+**1. 학습 데이터용 DRA:**
+```bash
+aws fsx create-data-repository-association \
+  --file-system-id ${FSX_LUSTRE_ID} \
+  --file-system-path /data \
+  --data-repository-path s3://${S3_BUCKET_NAME}/data/ \
+  --batch-import-meta-data-on-create \
+  --s3 '{
+    "AutoImportPolicy": {
+      "Events": ["NEW", "CHANGED", "DELETED"]
+    }
+  }' \
+  --region ${AWS_REGION}
+```
+
+**2. 체크포인트용 DRA:**
+```bash
+aws fsx create-data-repository-association \
+  --file-system-id ${FSX_LUSTRE_ID} \
+  --file-system-path /checkpoints \
+  --data-repository-path s3://${S3_BUCKET_NAME}/checkpoints/ \
+  --s3 '{
+    "AutoImportPolicy": {
+      "Events": ["NEW", "CHANGED", "DELETED"]
+    },
+    "AutoExportPolicy": {
+      "Events": ["NEW", "CHANGED", "DELETED"]
+    }
+  }' \
+  --region ${AWS_REGION}
+```
+
+**3. 로그용 DRA:**
+```bash
+aws fsx create-data-repository-association \
+  --file-system-id ${FSX_LUSTRE_ID} \
+  --file-system-path /logs \
+  --data-repository-path s3://${S3_BUCKET_NAME}/logs/ \
+  --s3 '{
+    "AutoExportPolicy": {
+      "Events": ["NEW", "CHANGED", "DELETED"]
+    }
+  }' \
+  --region ${AWS_REGION}
+```
+
+**4. 결과용 DRA:**
+```bash
+aws fsx create-data-repository-association \
+  --file-system-id ${FSX_LUSTRE_ID} \
+  --file-system-path /results \
+  --data-repository-path s3://${S3_BUCKET_NAME}/results/ \
+  --s3 '{
+    "AutoExportPolicy": {
+      "Events": ["NEW", "CHANGED", "DELETED"]
+    }
+  }' \
+  --region ${AWS_REGION}
+```
+
+**예상 출력 (각 DRA마다):**
+```json
+{
+    "Association": {
+        "AssociationId": "dra-0a1b2c3d4e5f6g7h8",
+        "ResourceARN": "arn:aws:fsx:us-east-1:123456789012:association/fs-xxx/dra-xxx",
+        "FileSystemId": "fs-0a1b2c3d4e5f6g7h8",
+        "Lifecycle": "CREATING",
+        "FileSystemPath": "/data",
+        "DataRepositoryPath": "s3://parallelcluster-123456789012-us-east-1/data/",
+        "BatchImportMetaDataOnCreate": true,
+        "ImportedFileChunkSize": 1024,
+        "S3": {
+            "AutoImportPolicy": {
+                "Events": ["NEW", "CHANGED", "DELETED"]
+            }
+        }
+    }
+}
+```
+
+> 💡 **DRA 설정 설명:**
+> - **AutoImportPolicy**: S3에서 FSx로 자동 가져오기
+>   - `data/`: 학습 데이터는 import만 (읽기 전용)
+>   - `checkpoints/`: import & export (저장 및 복원)
+> - **AutoExportPolicy**: FSx에서 S3로 자동 내보내기
+>   - `checkpoints/`, `logs/`, `results/`: FSx에서 생성된 파일을 S3로 백업
+> - **BatchImportMetaDataOnCreate**: 생성 시 S3 메타데이터 일괄 가져오기
+
+#### DRA 생성 상태 확인
+
+```bash
+# 모든 DRA 목록 확인
+aws fsx describe-data-repository-associations \
+  --filters Name=file-system-id,Values=${FSX_LUSTRE_ID} \
+  --region ${AWS_REGION} \
+  --query 'Associations[*].[AssociationId,FileSystemPath,DataRepositoryPath,Lifecycle]' \
+  --output table
+```
+
+**예상 출력:**
+```
+---------------------------------------------------------------
+|          DescribeDataRepositoryAssociations                |
++----------------------+---------------+-----------+-----------+
+|  dra-0a1b2c3d...    |  /data        | s3://.../data/       | AVAILABLE |
+|  dra-1b2c3d4e...    |  /checkpoints | s3://.../checkpoints/| AVAILABLE |
+|  dra-2c3d4e5f...    |  /logs        | s3://.../logs/       | AVAILABLE |
+|  dra-3d4e5f6g...    |  /results     | s3://.../results/    | AVAILABLE |
++----------------------+---------------+-----------+-----------+
+```
+
+#### DRA 상태가 AVAILABLE이 될 때까지 대기
+
+```bash
+# DRA 생성 완료 확인 (모든 DRA가 AVAILABLE 상태가 될 때까지)
+while true; do
+  STATUS=$(aws fsx describe-data-repository-associations \
+    --filters Name=file-system-id,Values=${FSX_LUSTRE_ID} \
+    --region ${AWS_REGION} \
+    --query 'Associations[?Lifecycle!=`AVAILABLE`].Lifecycle' \
+    --output text)
+  
+  if [ -z "$STATUS" ]; then
+    echo "✅ All DRAs are AVAILABLE!"
+    break
+  else
+    echo "Waiting for DRAs to be AVAILABLE... (Current: $STATUS)"
+    sleep 30
+  fi
+done
+```
+
+> ⏱️ **예상 소요 시간:** 각 DRA당 1-2분, 총 5-10분
+
+#### 데이터 접근 예시
+
+DRA 설정이 완료되면 클러스터에서 다음과 같이 데이터에 접근할 수 있습니다:
+
+```bash
+# 클러스터 Head Node에서 실행 (클러스터 생성 후)
+# S3: s3://bucket/data/imagenet/train/image001.jpg
+# FSx: /lustre/data/imagenet/train/image001.jpg
+
+# S3에서 FSx로 자동 import (첫 접근 시)
+ls /lustre/data/imagenet/
+
+# 체크포인트 저장 (FSx → S3로 자동 export)
+cp model.pth /lustre/checkpoints/epoch_10.pth
+
+# 로그 저장 (FSx → S3로 자동 export)
+echo "Training completed" > /lustre/logs/training.log
+```
+
+#### FSx Lustre 디렉토리 환경 변수 저장
+
+나중에 학습 스크립트에서 사용할 수 있도록 경로를 저장합니다:
+
+```bash
+# FSx Lustre 경로 환경 변수
+export LUSTRE_DATA_DIR=/lustre/data
+export LUSTRE_CHECKPOINT_DIR=/lustre/checkpoints
+export LUSTRE_LOG_DIR=/lustre/logs
+export LUSTRE_RESULTS_DIR=/lustre/results
+
+# 환경 변수 파일에 추가
+cat >> ~/pcluster-env.sh << EOF
+export LUSTRE_DATA_DIR=${LUSTRE_DATA_DIR}
+export LUSTRE_CHECKPOINT_DIR=${LUSTRE_CHECKPOINT_DIR}
+export LUSTRE_LOG_DIR=${LUSTRE_LOG_DIR}
+export LUSTRE_RESULTS_DIR=${LUSTRE_RESULTS_DIR}
+EOF
+```
+
+---
+
+### 5.5 환경 변수 저장
+
+S3 버킷 및 이미지 정보를 환경 변수 파일에 추가합니다:
 
 ```bash
 # 환경 변수 파일에 추가
 cat >> ~/pcluster-env.sh << EOF
 export AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}
 export S3_BUCKET_NAME=${S3_BUCKET_NAME}
+export ECR_REPO_NAME=${ECR_REPO_NAME}
+export ECR_REPO_URI=${ECR_REPO_URI}
+export IMAGE_TAG=${IMAGE_TAG}
+export TRAINING_IMAGE_URI=${TRAINING_IMAGE_URI}
 EOF
 
 # 확인
 source ~/pcluster-env.sh
-echo "S3 Bucket: ${S3_BUCKET_NAME}"
 ```
 
 #### 전체 환경 변수 확인
@@ -1054,12 +1309,40 @@ export FSX_LUSTRE_ID=fs-0a1b2c3d4e5f6g7h8
 export FSX_LUSTRE_MOUNT_NAME=xxxxxxxx
 export FSX_LUSTRE_DNS=fs-xxx.fsx.us-east-1.amazonaws.com
 export FSX_OPENZFS_ROOT_VOLUME_ID=fsvol-0a1b2c3d4e5f6g7h8
+export HEAD_NODE_BOOTSTRAP_SCRIPT=s3://parallelcluster-123456789012-us-east-1/scripts/bootstrap/head-node-enroot-pyxis-setup.sh
+export COMPUTE_NODE_BOOTSTRAP_SCRIPT=s3://parallelcluster-123456789012-us-east-1/scripts/bootstrap/compute-node-enroot-pyxis-setup.sh
+export AWS_ACCOUNT_ID=123456789012
+export S3_BUCKET_NAME=parallelcluster-123456789012-us-east-1
 export ECR_REPO_NAME=pytorch-training-custom
 export ECR_REPO_URI=123456789012.dkr.ecr.us-east-1.amazonaws.com/pytorch-training-custom
 export IMAGE_TAG=latest
 export TRAINING_IMAGE_URI=123456789012.dkr.ecr.us-east-1.amazonaws.com/pytorch-training-custom:latest
-export AWS_ACCOUNT_ID=123456789012
-export S3_BUCKET_NAME=parallelcluster-123456789012-us-east-1
+export LUSTRE_DATA_DIR=/lustre/data
+export LUSTRE_CHECKPOINT_DIR=/lustre/checkpoints
+export LUSTRE_LOG_DIR=/lustre/logs
+export LUSTRE_RESULTS_DIR=/lustre/results
+```
+
+---
+
+### 5.6 S3 버킷 구조 최종 확인
+
+```bash
+# 전체 버킷 구조 확인
+aws s3 ls s3://${S3_BUCKET_NAME}/ --recursive --human-readable --summarize
+```
+
+**예상 구조:**
+```
+2024-01-01 12:00:00    3.2 KiB scripts/bootstrap/head-node-enroot-pyxis-setup.sh
+2024-01-01 12:00:00    2.8 KiB scripts/bootstrap/compute-node-enroot-pyxis-setup.sh
+2024-01-01 12:00:00    1.2 KiB data/sample/README.txt
+                           PRE checkpoints/
+                           PRE logs/
+                           PRE results/
+
+Total Objects: 3
+   Total Size: 7.2 KiB
 ```
 
 ---

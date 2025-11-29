@@ -1,0 +1,110 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+Region: ${AWS_REGION}
+
+DevSettings:
+  Timeouts:
+    HeadNodeBootstrapTimeout: 43200  # 12 hours
+    ComputeNodeBootstrapTimeout: 7200  # 2 hours
+
+Imds:
+  ImdsSupport: v2.0
+
+Image:
+  Os: ubuntu2204
+
+HeadNode:
+  InstanceType: m5.8xlarge
+  Networking:
+    SubnetId: ${PUBLIC_SUBNET_ID}
+    ElasticIp: false
+    AdditionalSecurityGroups:
+      - ${SECURITY_GROUP_ID}
+  LocalStorage:
+    RootVolume:
+      Size: 500
+      DeleteOnTermination: true  # Root and /home volume for users
+  Iam:
+    AdditionalIamPolicies:
+      # Grant ECR, SSM and S3 access
+      - Policy: arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      - Policy: arn:aws:iam::aws:policy/AmazonS3FullAccess
+      - Policy: arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess
+      - Policy: arn:aws:iam::aws:policy/AmazonElasticContainerRegistryPublicFullAccess
+  CustomActions:
+    OnNodeConfigured:
+      Sequence:
+        - Script: 'https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-post-install-scripts/main/docker/postinstall.sh'
+        - Script: '${HEAD_NODE_BOOTSTRAP_SCRIPT}'
+
+Scheduling:
+  Scheduler: slurm
+  SlurmSettings:
+    ScaledownIdletime: -1  # Disable automatic scale-down
+    QueueUpdateStrategy: DRAIN
+    CustomSlurmSettings:
+      # Simple accounting to text file
+      - JobCompType: jobcomp/filetxt
+      - JobCompLoc: /home/slurm/slurm-job-completions.txt
+      - JobAcctGatherType: jobacct_gather/linux
+      # Increase timeout before marking node as DOWN
+      - SlurmdTimeout: 1000
+  SlurmQueues:
+    - Name: compute-gpu
+      CapacityType: ONDEMAND
+      Networking:
+        SubnetIds:
+          - ${PRIVATE_SUBNET_ID}
+        PlacementGroup:
+          Enabled: true
+        AdditionalSecurityGroups:
+          - ${SECURITY_GROUP_ID}
+      ComputeSettings:
+        LocalStorage:
+          EphemeralVolume:
+            MountDir: /scratch  # Local NVMe scratch space
+          RootVolume:
+            Size: 512
+      JobExclusiveAllocation: true  # Each job gets exclusive access to nodes
+      ComputeResources:
+        - Name: distributed-ml
+          InstanceType: g5.8xlarge
+          MinCount: 2
+          MaxCount: 2
+          Efa:
+            Enabled: true
+            GdrSupport: true
+      Iam:
+        AdditionalIamPolicies:
+          - Policy: arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+          - Policy: arn:aws:iam::aws:policy/AmazonS3FullAccess
+          - Policy: arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess
+          - Policy: arn:aws:iam::aws:policy/AmazonElasticContainerRegistryPublicFullAccess
+      CustomActions:
+        OnNodeConfigured:
+          Sequence:
+            - Script: 'https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-post-install-scripts/main/docker/postinstall.sh'
+            - Script: '${COMPUTE_NODE_BOOTSTRAP_SCRIPT}'
+
+SharedStorage:
+  - Name: shared-workspace-zfs
+    StorageType: FsxOpenZfs
+    MountDir: /fsx
+    FsxOpenZfsSettings:
+      VolumeId: ${FSX_OPENZFS_ROOT_VOLUME_ID}
+
+  - Name: fsx-lustre
+    MountDir: /lustre
+    StorageType: FsxLustre
+    FsxLustreSettings:
+      FileSystemId: ${FSX_LUSTRE_ID}
+      DeploymentType: PERSISTENT_1
+
+Monitoring:
+  DetailedMonitoring: true
+  Logs:
+    CloudWatch:
+      Enabled: true
+  Dashboards:
+    CloudWatch:
+      Enabled: true
