@@ -244,13 +244,21 @@ aws ec2 create-capacity-reservation \
 
 Capacity Reservation을 사용하려면 설정 파일에서 다음을 수정:
 
-1. **PlacementGroup 비활성화**:
+1. **CapacityType 수정**:
+```yaml
+  SlurmQueues:
+    - Name: compute-gpu
+      # Capacity Reservation 사용 시 아래 처럼 CAPACITY_BLOCK으로 수정
+      CapacityType: CAPACITY_BLOCK
+```
+
+2. **PlacementGroup 비활성화**:
 ```yaml
 PlacementGroup:
   Enabled: false  # Capacity Reservation과 함께 사용 불가
 ```
 
-2. **CapacityReservationTarget 추가**:
+3. **CapacityReservationTarget 추가**:
 ```yaml
 ComputeResources:
   - Name: distributed-ml
