@@ -54,6 +54,8 @@ Scheduling:
   SlurmQueues:
     - Name: compute-gpu
       CapacityType: ONDEMAND
+      # Capacity Reservation 사용 시 아래 처럼 CAPACITY_BLOCK으로 수정
+      # CapacityType: CAPACITY_BLOCK
       Networking:
         SubnetIds:
           - ${PRIVATE_SUBNET_ID}
