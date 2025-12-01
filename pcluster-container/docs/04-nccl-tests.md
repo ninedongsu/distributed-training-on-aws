@@ -203,7 +203,7 @@ tail -f nccl-all_reduce_perf_1.out
 
 ✅ NCCL Tests 실행이 완료되었습니다!
 
-> 💡 2025.12.02 일자 기준 ap-northeast-2(Sydney) 리전에서 2대의 p5e.48xlarge로 테스트 한 결과를 (./99-appendix-nccl-test-results.md)에서 확인 할 수 있습니다.
+> 💡 2025.12.02 일자 기준 ap-northeast-2(Sydney) 리전에서 2대의 p5e.48xlarge로 테스트 한 결과를 [99-appendix-nccl-test-results.md](./99-appendix-nccl-test-results.md)에서 확인 할 수 있습니다.
 
 
 ---
